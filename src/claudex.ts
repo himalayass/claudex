@@ -1,0 +1,379 @@
+#!/usr/bin/env bun
+
+import http from "node:http";
+import net from "node:net";
+import { Readable } from "node:stream";
+import { spawn } from "node:child_process";
+import { accessSync, constants, existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { dirname, join } from "node:path";
+import {
+  applyDefaultEffort,
+  approxTokenCount,
+  hasEffortFlag,
+  parseOpenAiConfig,
+  sanitizeToolFields,
+  type JsonObject,
+} from "./core";
+
+const args = process.argv.slice(2);
+const preserveClientEffort = hasEffortFlag(args);
+const forcedModel = process.env.CLAUDEX_FORCE_MODEL || "gpt-5.3-codex";
+const defaultReasoningEffort = process.env.CLAUDEX_DEFAULT_REASONING_EFFORT || "xhigh";
+const debug = process.env.CLAUDEX_DEBUG === "1";
+
+function fail(message: string): never {
+  console.error(`claudex: ${message}`);
+  process.exit(1);
+}
+
+function ensureExecutable(path: string): boolean {
+  try {
+    accessSync(path, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function resolveOpenAiConfigPath(): string {
+  if (process.env.CLAUDEX_OPENAI_MD) {
+    return process.env.CLAUDEX_OPENAI_MD;
+  }
+
+  const entryPath = process.argv[1] ?? process.execPath;
+  const scriptPath = realpathSync(entryPath);
+  const scriptDir = dirname(scriptPath);
+  return join(scriptDir, "OPENAI.md");
+}
+
+function readOpenAiConfig(openAiMdPath: string): { upstreamBaseUrl: string; upstreamApiKey: string } {
+  if (!existsSync(openAiMdPath)) {
+    fail(`missing file: ${openAiMdPath}`);
+  }
+
+  const contents = readFileSync(openAiMdPath, "utf8");
+
+  try {
+    return parseOpenAiConfig(contents, process.env.OPENAI_API_KEY);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    fail(`${message} (${openAiMdPath})`);
+  }
+}
+
+function resolveClaudeBinary(): string {
+  if (process.env.CLAUDEX_CLAUDE_BIN) {
+    return process.env.CLAUDEX_CLAUDE_BIN;
+  }
+
+  const entryPath = process.argv[1] ?? process.execPath;
+  const scriptPath = realpathSync(entryPath);
+  const scriptDir = dirname(scriptPath);
+  const reverseDir = join(scriptDir, "reverse");
+
+  if (existsSync(reverseDir)) {
+    const localCandidates = readdirSync(reverseDir, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name.startsWith("claude-"))
+      .map((entry) => join(reverseDir, entry.name))
+      .filter((path) => ensureExecutable(path))
+      .sort((a, b) => b.localeCompare(a, undefined, { numeric: true, sensitivity: "base" }));
+
+    if (localCandidates.length > 0) {
+      return localCandidates[0];
+    }
+  }
+
+  const binaryInPath = Bun.which("claude");
+  if (binaryInPath) {
+    return binaryInPath;
+  }
+
+  fail("Claude binary not found. Set CLAUDEX_CLAUDE_BIN.");
+}
+
+function pickFreePort(host: string): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.once("error", reject);
+    server.listen(0, host, () => {
+      const addr = server.address();
+      if (!addr || typeof addr === "string") {
+        server.close();
+        reject(new Error("failed to get listen port"));
+        return;
+      }
+
+      const port = addr.port;
+      server.close((closeError) => {
+        if (closeError) {
+          reject(closeError);
+          return;
+        }
+        resolve(port);
+      });
+    });
+  });
+}
+
+function writeJson(res: http.ServerResponse, statusCode: number, data: unknown): void {
+  const body = JSON.stringify(data);
+  res.writeHead(statusCode, {
+    "content-type": "application/json",
+    "content-length": Buffer.byteLength(body),
+  });
+  res.end(body);
+}
+
+function readBody(req: http.IncomingMessage): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer | string) => {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    });
+    req.on("end", () => resolve(Buffer.concat(chunks)));
+    req.on("error", reject);
+  });
+}
+
+function copyHeadersFromUpstream(headers: Headers): Record<string, string> {
+  const out: Record<string, string> = {};
+  headers.forEach((value, key) => {
+    if (key.toLowerCase() === "transfer-encoding") {
+      return;
+    }
+    out[key] = value;
+  });
+  return out;
+}
+
+async function proxyRaw(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  bodyBuffer: Buffer,
+  requestPath: string,
+  upstreamOrigin: URL,
+  upstreamApiKey: string,
+  overrideBody: JsonObject | null = null
+): Promise<void> {
+  const headers: Record<string, string> = {
+    authorization: `Bearer ${upstreamApiKey}`,
+  };
+
+  for (const [key, value] of Object.entries(req.headers)) {
+    if (value === undefined) {
+      continue;
+    }
+    const normalized = key.toLowerCase();
+    if (normalized === "host" || normalized === "content-length" || normalized === "authorization") {
+      continue;
+    }
+    headers[normalized] = Array.isArray(value) ? value.join(", ") : value;
+  }
+
+  let outboundBody = bodyBuffer;
+  if (overrideBody !== null) {
+    const payload = JSON.stringify(overrideBody);
+    outboundBody = Buffer.from(payload);
+    headers["content-type"] = "application/json";
+    headers["content-length"] = String(outboundBody.length);
+  } else if (outboundBody.length > 0) {
+    headers["content-length"] = String(outboundBody.length);
+  }
+
+  const upstreamUrl = new URL(requestPath, upstreamOrigin);
+  const upstreamResponse = await fetch(upstreamUrl, {
+    method: req.method,
+    headers,
+    body: req.method === "GET" || req.method === "HEAD" ? undefined : outboundBody,
+  });
+
+  res.writeHead(upstreamResponse.status, copyHeadersFromUpstream(upstreamResponse.headers));
+  if (!upstreamResponse.body) {
+    res.end();
+    return;
+  }
+
+  Readable.fromWeb(upstreamResponse.body as any).pipe(res);
+}
+
+async function startProxy(
+  listenHost: string,
+  listenPort: number,
+  upstreamOrigin: URL,
+  upstreamApiKey: string
+): Promise<http.Server> {
+  const server = http.createServer(async (req, res) => {
+    try {
+      const url = new URL(req.url || "/", `http://${listenHost}:${listenPort}`);
+      const path = url.pathname;
+      const method = req.method || "GET";
+
+      if (method === "GET" && path === "/health") {
+        writeJson(res, 200, {
+          ok: true,
+          forced_model: forcedModel,
+          upstream: upstreamOrigin.origin + upstreamOrigin.pathname,
+        });
+        return;
+      }
+
+      if (method === "GET" && path === "/v1/models") {
+        writeJson(res, 200, {
+          object: "list",
+          data: [
+            {
+              id: forcedModel,
+              object: "model",
+              created: Math.floor(Date.now() / 1000),
+              owned_by: "claudex",
+            },
+          ],
+        });
+        return;
+      }
+
+      if (method === "GET" && path.startsWith("/v1/models/")) {
+        const requestedModel = decodeURIComponent(path.slice("/v1/models/".length));
+        writeJson(res, 200, {
+          id: requestedModel,
+          object: "model",
+          created: Math.floor(Date.now() / 1000),
+          owned_by: "claudex",
+        });
+        return;
+      }
+
+      if (method === "POST" && path === "/v1/messages/count_tokens") {
+        const bodyBuffer = await readBody(req);
+        let parsed: JsonObject = {};
+        try {
+          parsed = bodyBuffer.length > 0 ? JSON.parse(bodyBuffer.toString("utf8")) : {};
+        } catch {
+          parsed = {};
+        }
+        writeJson(res, 200, { input_tokens: approxTokenCount(parsed) });
+        return;
+      }
+
+      if (method === "POST" && path === "/v1/messages") {
+        const bodyBuffer = await readBody(req);
+        let parsed: JsonObject;
+        try {
+          parsed = bodyBuffer.length > 0 ? JSON.parse(bodyBuffer.toString("utf8")) : {};
+        } catch {
+          writeJson(res, 400, {
+            type: "error",
+            error: {
+              type: "invalid_request_error",
+              message: "Invalid JSON body",
+            },
+          });
+          return;
+        }
+
+        const originalModel = String(parsed.model ?? "");
+        parsed.model = forcedModel;
+        applyDefaultEffort(parsed, {
+          forcedModel,
+          defaultReasoningEffort,
+          preserveClientEffort,
+        });
+        const removedToolFields = sanitizeToolFields(parsed);
+
+        if (debug) {
+          const effort = parsed.output_config?.effort ?? parsed.reasoning?.effort ?? "unset";
+          console.error(
+            `claudex-proxy model remap: ${originalModel} -> ${forcedModel}, effort=${effort}, preserve_client_effort=${preserveClientEffort}, removed_tool_fields=${removedToolFields}`
+          );
+        }
+
+        await proxyRaw(req, res, bodyBuffer, url.pathname + url.search, upstreamOrigin, upstreamApiKey, parsed);
+        return;
+      }
+
+      const bodyBuffer = await readBody(req);
+      await proxyRaw(req, res, bodyBuffer, url.pathname + url.search, upstreamOrigin, upstreamApiKey);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      writeJson(res, 500, {
+        type: "error",
+        error: {
+          type: "api_error",
+          message: `claudex-proxy internal error: ${message}`,
+        },
+      });
+    }
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(listenPort, listenHost, () => resolve());
+  });
+
+  return server;
+}
+
+async function main(): Promise<void> {
+  const openAiMdPath = resolveOpenAiConfigPath();
+  const { upstreamBaseUrl, upstreamApiKey } = readOpenAiConfig(openAiMdPath);
+  const upstreamOrigin = new URL(upstreamBaseUrl);
+  const claudeBinary = resolveClaudeBinary();
+
+  const listenHost = process.env.CLAUDEX_LISTEN_HOST || "127.0.0.1";
+  const listenPort = process.env.CLAUDEX_PORT ? Number(process.env.CLAUDEX_PORT) : await pickFreePort(listenHost);
+  if (!Number.isInteger(listenPort) || listenPort < 1 || listenPort > 65535) {
+    fail("invalid CLAUDEX_PORT value");
+  }
+
+  const proxyServer = await startProxy(listenHost, listenPort, upstreamOrigin, upstreamApiKey);
+  const proxyUrl = `http://${listenHost}:${listenPort}`;
+
+  console.error(`claudex: proxy=${proxyUrl} force_model=${forcedModel}`);
+
+  const child = spawn(claudeBinary, args, {
+    stdio: "inherit",
+    env: {
+      ...process.env,
+      ANTHROPIC_BASE_URL: proxyUrl,
+      ANTHROPIC_API_KEY: "claudex-local",
+      ANTHROPIC_MODEL: forcedModel,
+      ANTHROPIC_SMALL_FAST_MODEL: forcedModel,
+      ANTHROPIC_DEFAULT_OPUS_MODEL: forcedModel,
+      ANTHROPIC_DEFAULT_SONNET_MODEL: forcedModel,
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: forcedModel,
+      CLAUDE_CODE_SUBAGENT_MODEL: forcedModel,
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+    },
+  });
+
+  const forwardSignal = (signal: NodeJS.Signals): void => {
+    if (child.exitCode === null && !child.killed) {
+      child.kill(signal);
+    }
+  };
+  process.on("SIGINT", () => forwardSignal("SIGINT"));
+  process.on("SIGTERM", () => forwardSignal("SIGTERM"));
+
+  const exitCode = await new Promise<number>((resolve, reject) => {
+    child.once("error", reject);
+    child.once("exit", (code, signal) => {
+      if (signal) {
+        resolve(128);
+        return;
+      }
+      resolve(code ?? 0);
+    });
+  });
+
+  await new Promise<void>((resolve) => {
+    proxyServer.close(() => resolve());
+  });
+
+  process.exit(exitCode);
+}
+
+main().catch((error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(`claudex: ${message}`);
+  process.exit(1);
+});

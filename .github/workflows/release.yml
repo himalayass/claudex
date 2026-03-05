@@ -1,0 +1,92 @@
+name: Auto Release claudex
+
+on:
+  schedule:
+    - cron: "17 0 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: claudex-auto-release
+  cancel-in-progress: false
+
+jobs:
+  auto-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Detect latest upstream version
+        id: detect
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          installer_url="https://claude.ai/install.sh"
+          installer_script="$(curl -fsSL "${installer_url}")"
+          bucket="$(printf '%s\n' "${installer_script}" | sed -n 's/^GCS_BUCKET="\([^"]\+\)".*/\1/p' | head -n1)"
+          if [[ -z "${bucket}" ]]; then
+            echo "Failed to extract GCS_BUCKET from installer script: ${installer_url}"
+            exit 1
+          fi
+
+          latest="$(curl -fsSL "$bucket/latest" | tr -d '\r\n')"
+          if [[ -z "$latest" ]]; then
+            echo "Failed to read latest version"
+            exit 1
+          fi
+
+          tag="claude-v${latest}"
+          status="$(curl -s -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${tag}")"
+
+          if [[ "$status" == "200" ]]; then
+            should_release="false"
+            echo "Release already exists for ${tag}. Skipping build."
+          elif [[ "$status" == "404" ]]; then
+            should_release="true"
+            echo "New upstream version ${latest} detected."
+          else
+            echo "GitHub API returned unexpected status: ${status}"
+            exit 1
+          fi
+
+          echo "latest_version=${latest}" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "bucket=${bucket}" >> "$GITHUB_OUTPUT"
+          echo "should_release=${should_release}" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Bun
+        if: steps.detect.outputs.should_release == 'true'
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Build release binaries
+        if: steps.detect.outputs.should_release == 'true'
+        run: |
+          set -euo pipefail
+          bun run build:release
+
+      - name: Publish GitHub release
+        if: steps.detect.outputs.should_release == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.detect.outputs.tag }}
+          name: claudex for Claude Code ${{ steps.detect.outputs.latest_version }}
+          body: |
+            Automated release for Claude Code version `${{ steps.detect.outputs.latest_version }}`.
+            Bundled with Bun compile targets for Linux, macOS, and Windows.
+            Source bucket: `${{ steps.detect.outputs.bucket }}`.
+          files: |
+            dist/claudex-linux-x64
+            dist/claudex-linux-arm64
+            dist/claudex-macos-x64
+            dist/claudex-macos-arm64
+            dist/claudex-windows-x64.exe

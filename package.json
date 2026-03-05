@@ -1,0 +1,16 @@
+{
+  "name": "claudex",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:release": "bun run scripts/build-release.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "check": "bun run scripts/check.ts",
+    "setup:hooks": "bun run scripts/setup-git-hooks.ts"
+  },
+  "devDependencies": {
+    "bun-types": "^1.3.9",
+    "typescript": "^5.9.2"
+  }
+}
