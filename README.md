@@ -44,6 +44,7 @@ Optional environment variables:
 - `CLAUDEX_CHATGPT_BEARER_TOKEN` (alias of `CLAUDEX_UPSTREAM_BEARER_TOKEN`)
 - `CLAUDEX_CHATGPT_ACCOUNT_ID` (override `ChatGPT-Account-Id` header)
 - `CLAUDEX_CHATGPT_BASE_URL` (default: `https://chatgpt.com/backend-api/codex`)
+- `CLAUDEX_CHATGPT_DEFAULT_MODEL` (default: `gpt-5-codex` when ChatGPT mode is active and no model is explicitly configured)
 - `CLAUDEX_FORCE_LOGIN_METHOD` (default: `console`; set to `none` to disable injection)
 - `CLAUDEX_PORT`
 - `CLAUDEX_DEBUG=1`
@@ -55,6 +56,7 @@ Authentication note:
   2. If no provider is resolvable, fall back to official ChatGPT endpoint (`https://chatgpt.com/backend-api/codex`) and use `tokens.access_token` (then `tokens.id_token`) from `~/.codex/auth.json`.
 - In token mode, `claudex` automatically refreshes expired tokens via `tokens.refresh_token` when possible.
 - In token mode, if `tokens.account_id` exists, `claudex` sends it as `ChatGPT-Account-Id`.
+- To avoid model-availability errors on ChatGPT accounts, `claudex` uses `gpt-5-codex` as the implicit default model in ChatGPT mode (unless you explicitly set `model` or `CLAUDEX_FORCE_MODEL`).
 - `claudex` sets `ANTHROPIC_API_KEY` to the upstream bearer credential and, unless you pass `--settings` yourself, injects `--settings {"forceLoginMethod":"console"}` to avoid Claude.ai-subscription-first login flows.
 
 ## Quality gates

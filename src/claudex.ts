@@ -156,7 +156,16 @@ function loadRuntimeConfig(): RuntimeConfig {
     };
   }
 
-  const forcedModel = (process.env.CLAUDEX_FORCE_MODEL || modelFromConfig || "gpt-5.3-codex").trim();
+  const forceModelFromEnv = process.env.CLAUDEX_FORCE_MODEL?.trim();
+  const forceModelFromConfig = modelFromConfig?.trim();
+  let forcedModelSource: "env" | "config" | "default" = "default";
+  if (forceModelFromEnv && forceModelFromEnv.length > 0) {
+    forcedModelSource = "env";
+  } else if (forceModelFromConfig && forceModelFromConfig.length > 0) {
+    forcedModelSource = "config";
+  }
+  const defaultForcedModel = "gpt-5.3-codex";
+  const forcedModel = (forceModelFromEnv || forceModelFromConfig || defaultForcedModel).trim();
 
   const authFileExists = existsSync(authPath);
   const authContents = authFileExists ? readFileSync(authPath, "utf8") : "";
@@ -195,11 +204,18 @@ function loadRuntimeConfig(): RuntimeConfig {
       typeof refreshConfig.clientId === "string" &&
       refreshConfig.clientId.length > 0;
 
+    // In ChatGPT mode, gpt-5.3-codex is not always available by default.
+    // Keep user-configured model values, but switch the default to a safer baseline.
+    let chatgptForcedModel = forcedModel;
+    if (forcedModelSource === "default" && forcedModel === defaultForcedModel) {
+      chatgptForcedModel = (process.env.CLAUDEX_CHATGPT_DEFAULT_MODEL || "gpt-5-codex").trim();
+    }
+
     return {
       upstreamBaseUrl: chatgptBaseUrl,
       upstreamBearerToken: tokenAuth.bearerToken,
       upstreamExtraHeaders: extraHeaders,
-      forcedModel,
+      forcedModel: chatgptForcedModel,
       authMode: "chatgpt-token",
       chatgptRefreshConfig: canAutoRefresh
         ? {
@@ -211,11 +227,15 @@ function loadRuntimeConfig(): RuntimeConfig {
     };
   } catch {
     const upstreamBearerToken = parseApiKeyFromAuthJson(authContents, envApiKey);
+    let chatgptForcedModel = forcedModel;
+    if (forcedModelSource === "default" && forcedModel === defaultForcedModel) {
+      chatgptForcedModel = (process.env.CLAUDEX_CHATGPT_DEFAULT_MODEL || "gpt-5-codex").trim();
+    }
     return {
       upstreamBaseUrl: chatgptBaseUrl,
       upstreamBearerToken,
       upstreamExtraHeaders: {},
-      forcedModel,
+      forcedModel: chatgptForcedModel,
       authMode: "chatgpt-api-key",
     };
   }
@@ -296,7 +316,12 @@ function readBody(req: http.IncomingMessage): Promise<Buffer> {
 function copyHeadersFromUpstream(headers: Headers): Record<string, string> {
   const out: Record<string, string> = {};
   headers.forEach((value, key) => {
-    if (key.toLowerCase() === "transfer-encoding") {
+    const normalized = key.toLowerCase();
+    if (
+      normalized === "transfer-encoding" ||
+      normalized === "content-encoding" ||
+      normalized === "content-length"
+    ) {
       return;
     }
     out[key] = value;
@@ -468,11 +493,17 @@ async function proxyRaw(
       continue;
     }
     const normalized = key.toLowerCase();
-    if (normalized === "host" || normalized === "content-length" || normalized === "authorization") {
+    if (
+      normalized === "host" ||
+      normalized === "content-length" ||
+      normalized === "authorization" ||
+      normalized === "accept-encoding"
+    ) {
       continue;
     }
     headers[normalized] = Array.isArray(value) ? value.join(", ") : value;
   }
+  headers["accept-encoding"] = "identity";
   for (const [key, value] of Object.entries(authState.extraHeaders)) {
     headers[key.toLowerCase()] = value;
   }
