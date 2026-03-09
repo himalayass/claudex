@@ -39,6 +39,7 @@ Optional environment variables:
 - `CLAUDEX_CODEX_AUTH` (overrides `~/.codex/auth.json`)
 - `CLAUDEX_MODEL_PROVIDER` (overrides `model_provider` selection)
 - `CLAUDEX_UPSTREAM_BASE_URL` (force endpoint URL)
+- `CLAUDEX_UPSTREAM_WIRE_API` (`messages` or `responses`; overrides provider `wire_api`)
 - `CLAUDEX_UPSTREAM_API_KEY` (force API key)
 - `CLAUDEX_UPSTREAM_BEARER_TOKEN` (force bearer token for ChatGPT token mode)
 - `CLAUDEX_CHATGPT_BEARER_TOKEN` (alias of `CLAUDEX_UPSTREAM_BEARER_TOKEN`)
@@ -54,6 +55,7 @@ Authentication note:
 - Priority is:
   1. Use `model_provider` / `CLAUDEX_UPSTREAM_BASE_URL` when resolvable, authenticated via API key.
   2. If no provider is resolvable, fall back to official ChatGPT endpoint (`https://chatgpt.com/backend-api/codex`) and use `tokens.access_token` (then `tokens.id_token`) from `~/.codex/auth.json`.
+- When the upstream uses `wire_api = "responses"` (or ChatGPT fallback mode), `claudex` now translates Anthropic `POST /v1/messages` requests, tools, and tool results to the OpenAI Responses API and maps streamed tool calls back into Anthropic `tool_use` blocks.
 - In token mode, `claudex` automatically refreshes expired tokens via `tokens.refresh_token` when possible.
 - In token mode, if `tokens.account_id` exists, `claudex` sends it as `ChatGPT-Account-Id`.
 - To avoid model-availability errors on ChatGPT accounts, `claudex` uses `gpt-5-codex` as the implicit default model in ChatGPT mode (unless you explicitly set `model` or `CLAUDEX_FORCE_MODEL`).

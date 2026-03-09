@@ -272,12 +272,14 @@ describe("mapAnthropicToolsToResponsesTools", () => {
         type: "function",
         name: "read_file",
         description: "Read file",
+        strict: true,
         parameters: {
           type: "object",
           properties: {
             path: { type: "string" },
           },
           required: ["path"],
+          additionalProperties: false,
         },
       },
     ]);
